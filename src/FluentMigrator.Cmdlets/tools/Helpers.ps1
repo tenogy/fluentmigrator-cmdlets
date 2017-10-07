@@ -23,6 +23,7 @@
 	
 	Write-Verbose "Using migration utility: $migratorPath"
 	Write-Verbose "Using migrations from assembly: $migrationAssemblyPath"
+	Write-Verbose "Using connectionString: $connectionString"
 
 	if ($Command -eq "update-database")
 	{
@@ -67,8 +68,8 @@
 			$parameters += " --verbose true"
 		}
 
-		Write-Debug "Executing: `"$migratorPath`" $parameters"
-		$output = Invoke-Expression "& `"$migratorPath`" $parameters";
+		Write-Verbose "Executing: `"$migratorPath`" $parameters"
+		$output = Invoke-Expression "& dotnet `"$migratorPath`" $parameters";
 		if ($verboseOutput)
 		{
 			for($i = 0; $i -lt $output.Length; $i++)
@@ -97,19 +98,33 @@
 function New-MigrationParameters([String]$ProjectName, [String]$ConnectionName)
 {
 	$project = Get-MigrationsProject $ProjectName $false
-	$migrationsAssemblyPath = Build-Project $project
-
-	Add-Type -AssemblyName System.Configuration
-	$connectionStringsSection = [System.Configuration.ConfigurationManager]::OpenExeConfiguration($migrationsAssemblyPath).ConnectionStrings
-
-	if ($connectionStringsSection)
+	
+	Write-Verbose "Migration project: `"$ProjectName`""
+	
+	$parameters = Build-Project $project
+	if (!$parameters)
 	{
-		$connectionStrings = $connectionStringsSection.ConnectionStrings
+		return $false
+	}
+	
+	$migrationsAssemblyPath = $parameters.MigrationsAssemblyPath
+	$outputPath = $parameters.OutputPath
+	Write-Verbose "Migration AssemblyPath: `"$migrationsAssemblyPath`""
+	Write-Verbose "OutputPath: `"$outputPath`""
+	
+	$configPath = Join-Path $outputPath "appsettings.json"
+	$config = Get-Content $configPath | Out-String | ConvertFrom-Json
+	
+	Write-Verbose "Config: `"$config`""
+	
+	if ($config)
+	{
+		$connectionStrings = $config.ConnectionStrings
 		if (!$ConnectionName)
 		{
 			$ConnectionName = "Default"
 		}
-		$connectionString = $connectionStrings.Item($ConnectionName)
+		$connectionString = $connectionStrings.$ConnectionName
 	}
 
 	if (!$connectionString)
@@ -120,25 +135,16 @@ function New-MigrationParameters([String]$ProjectName, [String]$ConnectionName)
 
 	return @{
 		MigrationsAssemblyPath = $migrationsAssemblyPath
-		ConnectionString = $connectionString.ConnectionString
+		ConnectionString = $connectionString
 	}
 }
 
 
 function Init-Migrator($provider, $WhatIf = $False)
 {
-	$packagesPath = ".\packages";
-	if (Test-Path .\.nuget\NuGet.config)
-	{
-		[xml]$nugetConfig = Get-Content .\.nuget\NuGet.config;
-		$repositoryPath = $nugetConfig.SelectSingleNode("/configuration/config/add[@key='repositoryPath']")
-		if ($repositoryPath -ne $null)
-		{
-			$packagesPath = Resolve-Path (Join-Path ".nuget" $repositoryPath.value)
-		}
-	}
-
-	$migrateExe = ((Get-ChildItem $packagesPath -Recurse "migrate.exe") | where { $_.FullName -match "FluentMigrator.\d+.\d+.\d+(.\d+)?\\tools" }) | Sort-Object -Property FullName -Descending;
+	$packagesPath = Join-Path $PSScriptRoot "../../../../";
+		
+	$migrateExe = ((Get-ChildItem $packagesPath -Recurse "FluentMigrator.Migrate.dll") | where { $_.FullName -match "FluentMigrator.\d+.\d+.\d+(.\d+)?\\tools" }) | Sort-Object -Property FullName -Descending;
 	if ($migrateExe -eq $null)
 	{
 		throw "Couldn't find migrate.exe anywhere. (Searched {0})" -f $packagesPath;
@@ -251,31 +257,15 @@ function Build-Project($project)
 	}
 
 	$outputPath = $project.ConfigurationManager.ActiveConfiguration.Properties.Item("OutputPath").Value
-	$outputFileName = $project.Properties.Item("AssemblyName").Value
+	$outputFileName = $project.Properties.Item("AssemblyName").Value + ".dll"
 	$outputType = $project.Properties.Item("OutputType").Value
 
-	$outputAssemblyPath = Join-Path (Join-Path (Split-Path $project.FullName) $outputPath) $outputFileName
+	$outputPath = Join-Path (Split-Path $project.FullName) $outputPath
+	$outputAssemblyPath = Join-Path $outputPath $outputFileName
 
-	if ($outputType -eq 0 -Or $outputType -eq 1)
-	{
-		$primaryExtension = ".exe"
-		$additionalExtension = ".dll"
-	}
-	else
-	{
-		$primaryExtension = ".dll"
-		$additionalExtension = ".exe"
-	}
 
-	$path = $outputAssemblyPath + $primaryExtension
-	if (Test-Path $path)
-	{
-		$outputAssemblyPath = $path
+	return @{
+		MigrationsAssemblyPath = $outputAssemblyPath
+		OutputPath = $outputPath
 	}
-	else
-	{
-		$outputAssemblyPath = $outputAssemblyPath + $additionalExtension
-	}
-
-	return $outputAssemblyPath
 }

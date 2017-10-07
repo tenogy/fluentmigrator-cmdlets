@@ -65,9 +65,6 @@ namespace $namespace
 	}
 }" | Out-File -Encoding "UTF8" -Force $outputPath
 
-	$projectItem = $project.ProjectItems.AddFromFile($outputPath)
-	$project.Save()
-
 	$DTE.ExecuteCommand("File.OpenFile", """" + $outputPath + """")
 }
 
